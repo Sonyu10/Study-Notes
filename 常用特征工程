@@ -1,0 +1,132 @@
+一、 类别特征：目标编码 (Target Encoding)
+
+适用数据集：
+包含**“高基数类别特征”**（High-cardinality categorical features）的表格数据。比如：用户的城市名（几百个）、商品ID（几万个）、邮政编码等。
+
+技术思路：
+如果直接用独热编码（One-Hot），几千个城市会生成几千列特征，导致维度爆炸和内存崩溃。目标编码的思路是：用这个类别在历史数据中对应的“目标变量平均值”来代替它。
+比如，把“北京市”替换为“北京地区客户的历史平均流失率 0.15”。这样既保留了类别信息，又把高维字符串压缩成了一维数字。
+
+======
+import pandas as pd
+
+# 假设 df 是训练集，包含 'City' (城市名) 和 'Churn' (是否流失，0或1)
+# 注意：目标编码极易产生数据泄露(过拟合)，必须结合 K-Fold 或者只在训练集上计算均值
+
+# 1. 计算每个城市对应的平均流失率
+city_target_mean = df.groupby('City')['Churn'].mean()
+
+# 2. 将计算出的均值映射回原数据框，生成新特征
+df['City_Target_Encoded'] = df['City'].map(city_target_mean)
+
+# 3. 处理测试集或未知类别出现的缺失值（用全局平均值填补）
+global_mean = df['Churn'].mean()
+df['City_Target_Encoded'] = df['City_Target_Encoded'].fillna(global_mean)
+=======
+
+
+
+二、 数值特征：连续变量分箱 (Binning / Discretization)
+
+适用数据集：
+包含年龄、收入、信用评分等连续数值型特征，且这些特征与目标变量存在非线性关系的数据集。
+
+技术思路：
+有些规律并不是线性的。比如“年龄与重病率”的关系，20岁到30岁差别不大，但60岁到70岁差别极大。如果直接输入年龄数值，线性模型很难学到这种突变。
+我们人为地把连续的数值切分成几个“箱子”（如：青年、中年、老年），将其转化为类别特征，能极大提升模型的非线性捕捉能力和对异常值的鲁棒性。
+
+=====
+import pandas as pd
+
+# 假设 df 中有一列连续的 'Age' (年龄) 特征
+
+# 1. 设定分箱的边界 (bins) 和每个箱子的标签 (labels)
+# 边界：0-18, 18-35, 35-60, 60-100
+bins = [0, 18, 35, 60, 100]
+labels = ['Minor', 'Young', 'Middle_Aged', 'Senior']
+
+# 2. 使用 pd.cut() 进行固定边界分箱
+df['Age_Group'] = pd.cut(df['Age'], bins=bins, labels=labels)
+
+# 3. 进阶玩法：等频分箱 (pd.qcut)
+# 如果你不知道边界怎么定，可以让系统自动切分成人数相等的 4 份 (四分位数)
+df['Age_Quantile_Group'] = pd.qcut(df['Age'], q=4, labels=['Q1', 'Q2', 'Q3', 'Q4'])
+=====
+
+
+
+三、 偏态分布处理：对数变换 (Log Transformation)
+
+适用数据集：
+包含金额、点击量、点赞数、评论数等呈现**“极度右偏长尾分布”**（少数人极高，多数人极低）的数值型特征。在使用线性回归或神经网络时尤其重要。
+
+技术思路：
+金额往往呈现指数级差异（有人花10元，有人花10000元）。绝大多数模型对正态分布（钟形曲线）的数据最敏感。
+直接把几十万的金额丢进模型，会产生巨大的梯度扰动。对数变换（Log Transform）能把这种长尾的指数曲线强行“拉平”，压缩异常大值的权重，让数据分布更接近正态分布。
+
+=====
+import numpy as np
+
+# 假设 df 中有一列极度不平衡的特征 'Transaction_Amount' (交易金额)
+
+# 使用 np.log1p() 进行对数变换
+# 为什么不用 np.log()？因为 log(0) 无意义会报错。
+# log1p 相当于 log(x + 1)，完美避开了数值为 0 的情况
+df['Amount_Log'] = np.log1p(df['Transaction_Amount'])
+
+# 如果数据中存在负数，不能直接用 log，可以使用数据归一化(StandardScaler)代替
+=====
+
+
+
+四、 时间序列：日期时间深度拆解 (Datetime Extraction)
+
+适用数据集：
+包含时间戳、具体日期的交易记录、用户行为日志、销售预测等业务数据集。
+
+技术思路：
+机器看不懂 "2026-04-02 14:30:00" 这种字符串。但时间里蕴含着极其丰富的周期性规律（比如：周末销量高、月底离职率高、半夜欺诈率高）。
+我们需要把一个时间字符串，像拆积木一样拆解成年、月、日、星期、小时，甚至判断它是否属于工作日/节假日。
+
+=====
+import pandas as pd
+
+# 假设 df 中有一列时间字符串特征 'Purchase_Time'
+# 1. 强制转换为 Pandas 的 datetime 时间格式
+df['Purchase_Time'] = pd.to_datetime(df['Purchase_Time'])
+
+# 2. 提取基础周期特征 (使用 .dt 访问器)
+df['Month'] = df['Purchase_Time'].dt.month           # 提取月份 (1-12)
+df['DayOfWeek'] = df['Purchase_Time'].dt.dayofweek   # 提取星期几 (0-6，0代表周一)
+df['Hour'] = df['Purchase_Time'].dt.hour             # 提取小时 (0-23)
+
+# 3. 衍生业务逻辑特征：判断是否为周末 (星期六和星期日为 5 和 6)
+# astype(int) 会把 True/False 转换为 1/0
+df['Is_Weekend'] = df['DayOfWeek'].isin([5, 6]).astype(int)
+=====
+
+
+
+五、 交互特征：数值交叉与多项式 (Polynomial / Interaction Features)
+
+适用数据集：
+包含多个强相关数值型特征，且特征之间存在协同效应（1+1>2）的数据集。如房价预测（长、宽）、信用评估（收入、负债）。
+
+技术思路：
+有些特征单独看没用，乘在一起才有意义。比如预测一套房子的价格，如果你只给模型“长”和“宽”，线性模型只会把它们相加。
+但如果你手动生成一个 长 * 宽 = 面积 的特征喂给模型，它就能直接领悟到核心要素。对于树模型，加减乘除的显性化特征也能帮它节省分裂的层数。
+
+=====
+# 假设 df 包含 'Income' (月收入) 和 'Debt' (每月还款额)
+
+# 1. 加减交叉 (如：计算剩余可支配收入)
+df['Disposable_Income'] = df['Income'] - df['Debt']
+
+# 2. 乘除交叉 (如：计算负债收入比 DTI，这是银行业的绝对核心特征)
+# 加 1e-5 防止没有收入的人导致除以 0 报错
+df['Debt_To_Income_Ratio'] = df['Debt'] / (df['Income'] + 1e-5)
+
+# 3. 多项式特征 (适用于非线性回归)
+# 把特征自身平方，放大特征的非线性权重
+df['Income_Squared'] = df['Income'] ** 2
+=====
