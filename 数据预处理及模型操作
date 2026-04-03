@@ -1,0 +1,150 @@
+一、 缺失值智能插补 (Missing Value Imputation)
+适用数据集：
+存在大量空值（NaN）的真实世界表格数据。无论什么行业，数据在采集中必然会有遗漏。
+
+技术思路：
+遇到空值，很多新手喜欢直接填 0。这是极其危险的！如果“年龄”缺失填了 0，会严重干扰模型。
+
+科学的做法是：
+1.数值型特征：用该列的中位数 (Median) 或均值 (Mean) 填补。
+2.类别型特征：用该列出现次数最多的众数 (Mode) 填补。
+
+=====
+import pandas as pd
+from sklearn.impute import SimpleImputer
+
+# 假设 df 是包含缺失值的数据集
+# 区分出数值列和类别列
+num_cols = df.select_dtypes(include=['float64', 'int64']).columns
+cat_cols = df.select_dtypes(include=['object']).columns
+
+# 1. 对数值型特征：使用“中位数”进行插补 (抗异常值能力比均值强)
+imputer_num = SimpleImputer(strategy='median')
+df[num_cols] = imputer_num.fit_transform(df[num_cols])
+
+# 2. 对类别型特征：使用“众数”(出现频率最高的值) 进行插补
+imputer_cat = SimpleImputer(strategy='most_frequent')
+df[cat_cols] = imputer_cat.fit_transform(df[cat_cols])
+=====
+
+
+
+二、 数据特征缩放 (Feature Scaling / Normalization)
+适用数据集：
+需要计算距离的模型（如 KNN、SVM、K-Means聚类）或对数值幅度极其敏感的模型（如 深度神经网络 NN、逻辑回归）。(注：XGBoost/LightGBM 等树模型不需要这一步)
+
+技术思路：
+如果一个特征是“年龄”（20-80），另一个特征是“年收入”（50000-500000），由于收入的数值太庞大，在计算距离或梯度更新时，它会完全“吞噬”掉年龄的影响。
+我们需要把所有数值特征压缩到同一个尺度（比如都在 0~1 之间，或者均值为0方差为1），让所有特征在同一个起跑线上公平竞争。
+
+
+=====
+import pandas as pd
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+# 假设 df 是只有数值型特征的数据集
+
+# 方案 A：标准化 (Standardization) - 最常用，适合神经网络和逻辑回归
+# 将数据转化为均值为 0，标准差为 1 的正态分布形态
+scaler_std = StandardScaler()
+df_scaled_std = pd.DataFrame(scaler_std.fit_transform(df), columns=df.columns)
+
+# 方案 B：归一化 (Normalization) - 适合图像像素处理或要求数值严格非负的场景
+# 将所有数据严格压缩到 0 到 1 之间
+scaler_minmax = MinMaxScaler()
+df_scaled_minmax = pd.DataFrame(scaler_minmax.fit_transform(df), columns=df.columns)
+=====
+
+
+
+三、 类别极度不平衡处理 (SMOTE 过采样)
+适用数据集：
+正负样本比例极其悬殊的数据集。例如：信用卡欺诈检测（99%正常，1%欺诈）、罕见病筛查、以及你刚做过的客户流失预测。
+
+技术思路：
+如果 99% 都是正常客户，模型为了追求准确率，会直接“偷懒”全猜正常，这样准确率也有 99%，但什么也测不出来。
+SMOTE（合成少数类过采样技术）的原理是：它会在少数类样本之间连线，在连线上“无中生有”地人工合成出新的少数类样本，直到正负样本数量平衡。
+
+
+=====
+import pandas as pd
+from imblearn.over_sampling import SMOTE
+
+# 假设 X 是特征矩阵，y 是极度不平衡的标签 (如 0 占 95%，1 占 5%)
+# 注意：SMOTE 只能在【训练集】上做，绝对不能在测试集或验证集上做！
+
+# 1. 初始化 SMOTE 算法，random_state 保证结果可复现
+smote = SMOTE(random_state=42)
+
+# 2. 对训练数据进行重采样，生成合成数据
+X_resampled, y_resampled = smote.fit_resample(X, y)
+
+# 打印重采样后的分布，你会发现 0 和 1 的数量变成 1:1 绝对平衡了
+# print(pd.Series(y_resampled).value_counts())
+=====
+
+
+
+四、 自动化特征选择 (Feature Selection)
+适用数据集：
+遭遇**“维度灾难”**的数据集。当你做了大量特征工程，或者经过独热编码（One-Hot）后，列数多达几百上千列，导致模型训练极慢且严重过拟合。
+
+技术思路：
+不是所有特征都有用。有些特征全是噪音。
+我们可以先用一个粗糙的“随机森林”跑一遍，让它给所有特征打个“重要性分数”。
+然后我们设定一个阈值（比如只保留排名前 50 的特征，或者重要性大于平均值的特征），把没用的垃圾特征全部扔掉，给模型减负。
+
+=====
+import pandas as pd
+from sklearn.feature_selection import SelectFromModel
+from sklearn.ensemble import RandomForestClassifier
+
+# 假设 X_train 是包含几百列特征的训练集，y_train 是标签
+
+# 1. 召唤一个随机森林作为“裁判”来评估特征重要性
+rf_evaluator = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_evaluator.fit(X_train, y_train)
+
+# 2. 使用 SelectFromModel 进行特征筛选
+# prefit=True 表示裁判已经训练好了；threshold='median' 表示只保留重要性排在前半部分的特征
+selector = SelectFromModel(rf_evaluator, prefit=True, threshold='median')
+
+# 3. 执行筛选，得到瘦身后的特征矩阵
+X_train_selected = selector.transform(X_train)
+
+# 4. (可选) 获取被保留下来的特征的名字列表
+selected_features_mask = selector.get_support()
+selected_feature_names = X_train.columns[selected_features_mask]
+=====
+
+
+
+五、 基础文本向量化 (Text Vectorization - TF-IDF)
+适用数据集：
+包含自然语言长文本的非结构化数据。例如：电商商品评论分析、客户投诉留言、新闻文本分类。
+
+技术思路：
+计算机看不懂“商品质量太差了，我要退款”这句话。我们需要把它变成数学向量。
+TF-IDF 算法包含两步：
+1.词频 (TF)：统计某个词在这句话里出现的次数。
+2.逆文档频率 (IDF)：如果“的、了、是”这些词在所有帖子里都出现了，系统会极大地压低它们的权重；如果“退款”这个词只在少数帖子里出现，系统会极大地拉高它的权重。从而精准提取句子的核心含义。
+
+=====
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+# 假设 df 中有一列名为 'Customer_Review' 的客户纯文本评价
+corpus = df['Customer_Review'].fillna('') # 必须把缺失值填为空字符串
+
+# 1. 初始化 TF-IDF 向量化器
+# max_features=1000: 为了防止内存爆炸，只保留全库出现频率最高的 1000 个核心词汇
+# stop_words='english': 自动过滤掉英文中的 "the", "is", "and" 等无意义虚词 (如是中文需自行提供停用词表)
+tfidf = TfidfVectorizer(max_features=1000, stop_words='english')
+
+# 2. 将文本转化为稀疏矩阵 (每一行是一条评论，每一列是一个单词的权重得分)
+text_matrix = tfidf.fit_transform(corpus)
+
+# 3. 将生成的矩阵转换回 DataFrame 格式，拼接到原数据框中
+# tfidf.get_feature_names_out() 可以获取那 1000 个具体的单词是什么
+text_df = pd.DataFrame(text_matrix.toarray(), columns=tfidf.get_feature_names_out())
+=====
